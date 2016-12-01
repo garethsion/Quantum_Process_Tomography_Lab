@@ -1,0 +1,18 @@
+classdef instr
+    properties
+        Type
+        Terminator = '\r\n'
+        Status
+    end
+    
+    methods
+        function instr_obj = instr(Type,Status)
+            instr_obj.Type = Type;
+            instr_obj.Status = Status;
+        end
+        function response = ask(instr, query)
+            instr.write(query);
+            response = instr.read;
+        end
+    end
+end

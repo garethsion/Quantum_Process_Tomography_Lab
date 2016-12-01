@@ -1,0 +1,691 @@
+classdef MSOClass < ModuleClass
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%%%%%%%%%%%% MSOClass is a GARII Module %%%%%%%%%%%%%%%%%
+    %%%%%%%% Mixed Signal Oscilloscope Agilent MSO-X 3104A %%%%%%%%%%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+    %Internal parameters
+    properties (Access = public)        
+        %Acquisition
+        channelBit = 16; %Nb of bit for readout (uint16)
+        MSO_info = cell(4,1); %Oscilloscope information structure (see get_MSO_info)
+        
+        %Filtering
+        trans_filter_fun;
+        trans_filter;
+        
+        %Temporary data during exp (chan).struct
+        temp_data;
+    end
+    
+    %GUI parameters
+    properties (Access = public)
+        hTransFiltText %Transient filter text
+    end
+    
+    %Main methods
+    methods (Access = public)
+        %Define all the main properties of instrument
+        function obj = MSOClass()
+            %Module name
+            obj.name = 'Oscilloscope MSO/DSO-X 3014A';
+            
+            %Instrument properties
+            obj.INST_brand = 'agilent';
+            obj.INST = {{'AGILENT TECHNOLOGIES,MSO-X 3104A,MY51500346,02.12.2012041800', 'visa', 'USB0::2391::6048::MY51500346::INSTR'} ...
+                        ... %{'AGILENT TECHNOLOGIES,MSO-X 3104A,MY51500346,02.12.2012041800', 'visa', 'USB0::0x0957::0x17A0::MY51500346::INSTR'} ...
+                        {'AGILENT TECHNOLOGIES,DSO-X 3104A,MY51500149,02.12.2012041800', 'visa', 'USB0::0x0957::0x17A0::MY51500149::INSTR'} ...
+                        {'AGILENT TECHNOLOGIES,DSO-X 2014A,MY54101284,02.36.2013091301', 'visa', 'USB0::2391::6040::MY54101284::INSTR'}};
+                           
+            %Acquisition settings
+            obj.settings{1} = SettingClass(obj,'channels','Acq. channels',[],[],[],...
+                                           {'1' '2' '3' '4'});
+                                       
+            obj.settings{end+1} = SettingClass(obj,'integ','Integrate?',1,[],[]);
+             
+            obj.settings{end+1} = SettingClass(obj,'osc_avg','Internal averaging?',0,@obj.osc_avg_check,@obj.osc_avg_set); 
+            obj.settings{end+1} = SettingClass(obj,'osc_avg_number','Number of Averages',2,@obj.osc_avg_number_check,[]); 
+                                 
+                                       
+            obj.settings{end+1} = SettingClass(obj,'AcqPts','Number of points',1000,[],@obj.AcqPts_set,...
+                                           {'100' '250' '500' '1000' '2000' '5000' '10000' ...
+                                            '20000' '50000' '100000' '200000' '500000'});
+            
+            obj.settings{end+1} = SettingClass(obj,'timeRange','Time range (s)',20e-6,...
+                                           @obj.timeRange_check,@obj.timeRange_set);
+            obj.settings{end+1} = SettingClass(obj,'timeOffset','Trigger time offset (s)',0,...
+                                           @obj.timeOffset_check,@obj.timeOffset_set);
+                                       
+            %Channel settings
+            obj.settings{end+1} = SettingClass(obj,'chan_sel','Select channel',1,[],[],{'1' '2' '3' '4'});
+                                       
+            obj.settings{end+1} = SettingClass(obj,'impedance1','Impedance','50 Ohm',[],@(x) obj.impedance_set(x,'1'),{'50 Ohm' '1 MOhm'});
+            obj.settings{end+1} = SettingClass(obj,'impedance2','Impedance','50 Ohm',[],@(x) obj.impedance_set(x,'2'),{'50 Ohm' '1 MOhm'});
+            obj.settings{end+1} = SettingClass(obj,'impedance3','Impedance','1 MOhm',[],@(x) obj.impedance_set(x,'3'),{'50 Ohm' '1 MOhm'});
+            obj.settings{end+1} = SettingClass(obj,'impedance4','Impedance','1 MOhm',[],@(x) obj.impedance_set(x,'4'),{'50 Ohm' '1 MOhm'});
+            
+            obj.settings{end+1} = SettingClass(obj,'voltRange1','Voltage range p-p (V)',0.1,@obj.voltRange_check,@(x) obj.voltRange_set(x,'1'));
+            obj.settings{end+1} = SettingClass(obj,'voltRange2','Voltage range p-p (V)',0.1,@obj.voltRange_check,@(x) obj.voltRange_set(x,'2'));
+            obj.settings{end+1} = SettingClass(obj,'voltRange3','Voltage range p-p (V)',0.1,@obj.voltRange_check,@(x) obj.voltRange_set(x,'3'));
+            obj.settings{end+1} = SettingClass(obj,'voltRange4','Voltage range p-p (V)',0.1,@obj.voltRange_check,@(x) obj.voltRange_set(x,'4'));
+                                       
+            obj.settings{end+1} = SettingClass(obj,'voltOffset1','Voltage offset (V)',0,@obj.voltOffset_check,@(x) obj.voltOffset_set(x,'1'));
+            obj.settings{end+1} = SettingClass(obj,'voltOffset2','Voltage offset (V)',0,@obj.voltOffset_check,@(x) obj.voltOffset_set(x,'2'));
+            obj.settings{end+1} = SettingClass(obj,'voltOffset3','Voltage offset (V)',0,@obj.voltOffset_check,@(x) obj.voltOffset_set(x,'3'));
+            obj.settings{end+1} = SettingClass(obj,'voltOffset4','Voltage offset (V)',0,@obj.voltOffset_check,@(x) obj.voltOffset_set(x,'4'));
+            
+            obj.settings{end+1} = SettingClass(obj,'voltCalib1','Calibration V-Voff (V)',0,[],[]);
+            obj.settings{end+1} = SettingClass(obj,'voltCalib2','Calibration V-Voff (V)',0,[],[]);
+            obj.settings{end+1} = SettingClass(obj,'voltCalib3','Calibration V-Voff (V)',0,[],[]);
+            obj.settings{end+1} = SettingClass(obj,'voltCalib4','Calibration V-Voff (V)',0,[],[]);
+            
+            %CPMG filter
+            obj.settings{end+1} = SettingClass(obj,'trans_filter_flag','Transient filter (f.*y)',0,[],[]);
+            
+            %Other options
+            obj.settings{end+1} = SettingClass(obj,'trig_opts','Trigger options','External',[],@obj.TrigOpts_set,...
+                                                               {'External' 'Computer'});
+            obj.settings{end+1} = SettingClass(obj,'acquire_res','Acquire resolution','High',[],@obj.AcqRes_set,...
+                                                               {'Normal' 'High'}); 
+                                                           
+            obj.settings{end+1} = SettingClass(obj,'dynVoltScale','Dynamic voltage scaling',0,[],[]);
+                                                           
+            %Get information about oscilloscope state
+            %Also setup transient axis if necessary
+            %Also called at send_all_settings
+            obj.user_update_all = @obj.update_MSO_info;
+            
+            %Define parameters  
+            
+            %Define measurements (and transient axis)
+            %DO NOT CHANGE INDEXING
+            obj.measures{1} = MeasureClass(obj,'channel 1','Channel 1 (V)',@()obj.read_transient(1),'Time (s)');
+            obj.measures{2} = MeasureClass(obj,'channel 2','Channel 2 (V)',@()obj.read_transient(2),'Time (s)');
+            obj.measures{3} = MeasureClass(obj,'channel 3','Channel 3 (V)',@()obj.read_transient(3),'Time (s)');
+            obj.measures{4} = MeasureClass(obj,'channel 4','Channel 4 (V)',@()obj.read_transient(4),'Time (s)');
+            end
+        
+        %Connect
+        function connect(obj)
+            obj.create_device();
+            if(~isempty(obj.dev))
+                obj.reset();
+                
+                %The DSO-X 2014A models do not allow setting impedance, it
+                %is always 1 MOhm
+                if(~isempty(strfind(obj.INST{obj.INSTnumber}{1},...
+                        '2014A')))                    
+                    obj.get_setting('impedance1').set_state(0);
+                    obj.get_setting('impedance2').set_state(0);
+                    obj.get_setting('impedance3').set_state(0);
+                    obj.get_setting('impedance4').set_state(0);
+                else
+                    obj.get_setting('impedance1').set_state(1);
+                    obj.get_setting('impedance2').set_state(1);
+                    obj.get_setting('impedance3').set_state(1);
+                    obj.get_setting('impedance4').set_state(1);
+                end
+            end
+        end
+        
+        %Disconnect
+        function disconnect(obj)
+            obj.reset();
+            obj.dev.close('no clear');
+            obj.dev = [];
+        end
+        
+        %Reset to some defaut parameter
+        function reset(obj)
+            obj.dev.write(':STOP');
+            obj.dev.ask('*OPC?');
+            %If not auto, the oscillo may not respond if there are no trigger
+            obj.dev.write(':TRIGGER:SWEEP AUTO'); 
+            
+            %Data acquisition parameters
+            obj.dev.write(':ACQUIRE:TYPE HRES'); 
+            obj.dev.write(':WAVEFORM:FORMAT WORD');
+            obj.dev.write(':WAVEFORM:BYTEORDER LSBFirst');
+            obj.dev.write(':WAV:POINTS:MODE RAW');
+            obj.get_setting('AcqPts').send(); %Added here, otherwise might not accept real send
+            
+            %Trigger                
+            obj.dev.write(':TRIG:MODE EDGE');
+            obj.dev.write(':TRIGGER:SOURCE EXT');
+            obj.dev.write(':TRIGGER:LEVEL 2.00V');
+            
+            % Time base reference
+            obj.dev.write(':TIMebase:REFerence Center')
+            
+            %Output trigger
+            obj.dev.write(':CALIBRATE:OUTPUT TRIG'); %output pulse when triggered
+            
+            %Channels
+            obj.dev.write(':CHANNEL1:COUPLING DC');
+            obj.dev.write(':CHANNEL2:COUPLING DC');
+            obj.dev.write(':CHANNEL3:COUPLING DC');
+            obj.dev.write(':CHANNEL4:COUPLING DC');
+            
+            obj.dev.check;
+        end        
+        
+        %EXPERIMENT FUNCTIONS
+        %Setup the experiment
+        function ok_flag = experiment_setup(obj)
+            
+            %obj.dev.write(':STOP');
+            %obj.dev.ask('*OPC?');
+            ok_flag = 0;
+            if(~isempty(obj.dev))
+                %Set settings
+                ok_flag = obj.send_all_settings();
+                if(~ok_flag)
+                    return;
+                end
+                
+                if(obj.get_setting('trans_filter_flag').val)
+                    try
+                        obj.trans_filter = obj.trans_filter_fun(obj.measures{1}.transient_axis.vals);
+                    catch
+                        disp('Transient filter not working');
+                        ok_flag = 0;
+                        return;
+                    end
+                end
+                
+                %Temporary data during experiment
+                %data = sum of data over all SPP and PC
+                %update_flag is 1 when new X or Y value
+                %count = number of data added together
+                obj.temp_data = cell(4,1);
+                for ct = 1:4
+                    obj.temp_data{ct}.data = [+inf -inf];
+                    obj.temp_data{ct}.update_flag = 0;
+                end
+                
+                ok_flag = obj.dev.check();
+            end
+        end
+        
+        %During experiment, sweep to next point
+        %type = [0=XY,1=X,2=Y,3=PC], pos = [X Y PC] value
+        function ok_flag = experiment_next(obj,type,pos)
+            if(obj.get_setting('osc_avg').val)
+                % obj.dev.write(':RUN');
+                obj.dev.write(':DIGITIZE');
+            end
+            
+            %Every point, not PC
+            if(~isempty(intersect(type,[0 1 2])))
+                %Reinitialize temp_data
+                for ct = 1:4
+                    obj.temp_data{ct}.update_flag = 1;
+                end
+            end
+            
+            ok_flag = 1;
+        end
+        
+        %Trigger
+        function experiment_trigger(obj)
+            if(strcmp(obj.get_setting('trig_opts').val,'Computer'))
+                obj.dev.wait_till_complete();
+                obj.dev.write('*TRG'); % = Oscilloscope acquires data
+            end
+        end 
+        
+        %End of experiment
+        function ok_flag = experiment_stop(obj)
+            ok_flag = 1;
+            if(obj.get_setting('osc_avg').val)
+                obj.dev.write(':STOP');
+               % obj.dev.ask('*OPC?');
+            end
+                
+        end
+        
+        %Measurement instrument to be ready, every shot
+        function experiment_setread(obj)
+            %Wait for trigger (single shot)
+            if(~obj.get_setting('osc_avg').val)
+                obj.dev.xwrite(':SINGLE'); %Set oscilloscope to be ready to acquire data
+            end
+        end
+    end
+    
+    %Wrapper for internal functions
+    methods (Access = public)
+        %Read transient (await trigger) for given channels
+        %npoints = number of points to acquire from oscilloscope
+        %Returns [x,y1,y2,y3,..] where 1,2,3 are channels
+        function data = read_transient(obj,channel)
+            avg_flag = obj.get_setting('osc_avg').val;
+            if(avg_flag)
+                obj.dev.write(':STOP');
+                %obj.dev.ask('*OPC?');
+            end
+            if(obj.get_setting('dynVoltScale').val && obj.temp_data{channel}.update_flag)
+                obj.dynamic_voltage_scaling(channel);
+                obj.temp_data{channel}.data = [+inf -inf];
+            end      
+
+            %Wait for oscilloscope to be ready
+            if(isempty(strfind(obj.INST{obj.INSTnumber}{1},...
+                    '2014A')))
+                operationComplete = obj.dev.ask('*OPC?');
+                ct = 0;
+                while(str2double(operationComplete) ~= 4128)
+                    operationComplete = obj.dev.ask(':OPER:COND?');
+                    pause(0.01);
+                    ct = ct + 1;
+                    if(ct > max(600,2*obj.MAIN.SRT)) %Wait 2xSRT max, min 1mn
+                        data = nan;
+                        disp('Oscilloscope was not ready. Skip point.');
+                        return;
+                    end
+                end
+            end
+
+            %Get data from oscilloscope
+            %Also update MSO_info if obj.temp_data.update_flag == 1
+            data = obj.read_channel(channel);
+
+            %Update min/max of data for scaling
+            old_data = obj.temp_data{channel}.data;
+            obj.temp_data{channel}.data = ...
+                [min(old_data(1),min(data)) max(old_data(2),max(data))];
+
+            %Apply data modifications (calibration,averaging,...)
+            data = data - obj.get_setting(['voltCalib' int2str(channel)]).val;
+
+            if(obj.get_setting('trans_filter_flag').val)
+                data = obj.trans_filt(:).*data;
+            end
+
+            if(~obj.MAIN.transient)
+                data = mean(data);
+%                     data = std(data);
+            end
+        end
+        
+        
+        %This function automatically readjust channel voltage
+        %range after measurement, if the max amplitude varies too much
+        function dynamic_voltage_scaling(obj,channel)
+            data = obj.temp_data{channel}.data;
+            if(any(isinf(data)))
+                return;
+            end
+            
+            info = obj.MSO_info{channel};
+            volt_range = info.YRange;
+            volt_offset = info.YOrigin;            
+            
+            mean_val = (data(2)+data(1))/2;
+            data = data - mean_val;
+            ampl_val = 1.3*2*max(abs(data));
+            %2 is for peak-to-peak, 1.3 is to have scaling always slightly larger than amplitude 
+            
+            smooth_rescale = 2;
+            percent_change = 0.08;
+            
+            %Modify offset
+            if(abs(1-mean_val/volt_offset) > percent_change)
+                mean_val = (mean_val + smooth_rescale*volt_offset)/(smooth_rescale+1); %Smooth rescaling
+                if(obj.voltOffset_check(mean_val,0))
+                    obj.voltOffset_set(mean_val,int2str(channel));
+                end
+            end
+            
+            %Modify amplitude
+            if(abs(1-ampl_val/volt_range) > percent_change)
+                ampl_val = (ampl_val + smooth_rescale*volt_range)/(smooth_rescale+1); %Smooth rescaling
+                if(obj.voltRange_check(ampl_val,0))
+                    obj.voltRange_set(ampl_val,int2str(channel));
+                end
+            end
+        end
+        
+        function value = voltRange_get(obj,chan) %chan as string
+            value = str2double(obj.dev.ask([':CHAN' chan ':RANG?']));
+        end
+        
+        function value = voltOffset_get(obj,chan) %chan as string
+            value = str2double(obj.dev.ask([':CHAN' chan ':OFFS?']));
+        end
+    end
+    
+    %GUI functions
+    methods (Access = public)
+        % Acquisition channels chosen in list
+        function select_acq_channel(obj,~,~)
+            hChan = obj.get_setting('channels').hText;
+            
+            %Get selected chanel string
+            sel_chan = get(hChan,'Value');
+            sel_chan_str = cell(length(sel_chan),1);
+            for ct = 1:length(sel_chan)
+                sel_chan_str{ct} = ['channel ' int2str(sel_chan(ct))];
+            end
+
+            %Turn on/off measurement channels
+            on_flag = 0;
+            for ct = 1:4
+                if(any(strcmp(obj.measures{ct}.name,sel_chan_str)))
+                    obj.measures{ct}.state = 1;
+                    on_flag = 1;
+                else
+                    obj.measures{ct}.state = 0;
+                end
+            end
+
+            %Check integration mode
+            if(on_flag && ~obj.get_setting('integ').val)
+                trans_flag = obj.MAIN.set_transient_mode(1);
+                if(~trans_flag)
+                    for ct = 1:4
+                        obj.measures{ct}.state = 0;
+                    end
+                    set(hChan,'Value',[]);
+                end
+            else
+                obj.MAIN.set_transient_mode(0);
+            end
+
+            %Update setting val
+            obj.get_setting('channels').update_val();
+        end
+        
+        %Data integration acquisition
+        function select_integrate(obj,~,~)
+            hInteg = obj.get_setting('integ').hText;
+
+            trans_flag = ~get(hInteg,'Value');
+            
+            if(~trans_flag)
+                obj.MAIN.set_transient_mode(0);
+            else
+                %Check if any channel is ON
+                meas_flag = 0;
+                for ct = 1:4
+                    if(obj.measures{ct}.state)
+                        meas_flag = 1;
+                        break;
+                    end
+                end
+
+                if(meas_flag)
+                    trans_flag = obj.MAIN.set_transient_mode(1);
+                end
+                set(hInteg,'Value',~trans_flag);
+            end
+
+            %Update setting val
+            obj.get_setting('integ').update_val();
+        end
+        
+        %Filtering: Transient filter load
+        function transfilt_load(obj,~,~)
+            [filename, pathname] = uigetfile('*.m','Open',...
+                                   ['.' filesep 'Library' filesep 'Acquisition filters']);
+
+             if(filename ~= 0)
+                 filename = filename(1:end-2);
+                 addpath(pathname);
+                 obj.trans_filter_fun = str2func(filename);
+                 set(obj.hTransFiltText,'String',filename);
+             end
+        end
+        
+        %Chanel selected for chanel settings
+        function channel_select_settings(obj,~,~)
+            flag = zeros(4,1);
+            flag(obj.get_setting('chan_sel').val) = 1;
+            
+            for ct = 1:4
+                obj.get_setting(['impedance' int2str(ct)]).set_UIvisibility(flag(ct));
+                obj.get_setting(['voltRange' int2str(ct)]).set_UIvisibility(flag(ct));
+                obj.get_setting(['voltOffset' int2str(ct)]).set_UIvisibility(flag(ct));
+                obj.get_setting(['voltCalib' int2str(ct)]).set_UIvisibility(flag(ct));
+            end
+        end
+        
+        function toggle_intAvg_UI(obj,hobj,~)
+                stat = get(hobj,'Value');
+                obj.get_setting('osc_avg_number').set_state_and_UIvisibility(stat);
+                if stat ==1
+                    obj.msgbox('Requires a continuous trigger.');
+                end
+        end
+
+    end
+    
+    %Internal functions
+    methods (Access = public)
+        %Read one channel/translate oscilloscope information
+        %SHOULD NOT CALL PREAMBLE EVERYTIME
+        function y = read_channel(obj,channel)
+            %Select channel
+            obj.dev.write([':WAVEFORM:SOURCE CHAN',num2str(channel)]);
+
+            %Block read data
+            rawdata = obj.dev.blockread(':WAV:DATA?',obj.channelBit);
+            
+            %Update axis information
+            if(obj.temp_data{channel}.update_flag)
+                obj.update_MSO_info(channel);
+                obj.temp_data{channel}.update_flag = 0;
+            end
+            
+            %Store all this information into a waveform structure for later use
+            y = obj.convert_rawdata(rawdata,channel);
+        end
+        
+        %Convert preamble block info from MSO to usable structure
+        function ok_flag = update_MSO_info(obj,varargin)
+            ok_flag = 0;
+            
+            if(~isempty(varargin))
+                chans = varargin{1};
+            else
+                chans = 1:4;
+            end
+            
+            for ctChan = chans
+                if(obj.measures{ctChan}.state)
+                    obj.dev.write([':WAVEFORM:SOURCE CHAN' int2str(ctChan)]);
+                    preambleBlock = obj.dev.ask(':WAVEFORM:PREAMBLE?');
+                    if(isempty(preambleBlock))
+                        return;
+                    end
+                    preambleBlock = str2double(regexp(preambleBlock,',','split'));
+
+                    info.Format = preambleBlock(1); % This should be 1, since we're specifying INT16 output
+                    info.Type = preambleBlock(2);
+                    info.Points = preambleBlock(3);
+                    info.Count = preambleBlock(4); % This is always 1
+                    info.XIncrement = preambleBlock(5); % in seconds
+                    info.XOrigin = preambleBlock(6); % in seconds
+                    info.XReference = preambleBlock(7);
+                    info.YIncrement = preambleBlock(8); % V
+                    info.YOrigin = preambleBlock(9);
+                    info.YReference = preambleBlock(10);
+                    
+                    info.YRange = obj.voltRange_get(int2str(ctChan));
+                    
+                    info.SecPerDiv = info.Points * info.XIncrement/10 ; % seconds
+                    info.Delay = ((info.Points/2 - info.XReference) * info.XIncrement + info.XOrigin); % seconds
+
+                    axis = info.XIncrement.*(1:info.Points).' - info.XIncrement;
+                    obj.MSO_info{ctChan} = info;
+                    
+                    %Update transient axis
+                    obj.measures{ctChan}.transient_axis.vals = axis;
+                    
+                else
+                    obj.measures{ctChan}.transient_axis.vals = [];
+                    obj.MSO_info{ctChan} = [];
+                end
+            end
+            
+            ok_flag = 1;
+        end
+        
+        %Get real value
+        function y = convert_rawdata(obj,rawdata,channel)
+            info = obj.MSO_info{channel};
+            y = zeros(info.Points,1);
+            y(1:length(rawdata)) = info.YIncrement.*(rawdata - info.YReference) + info.YOrigin;
+        end
+        
+        %Set number of points for acquisition
+        function AcqPts_set(obj,value)
+            obj.dev.write([':WAV:POINTS ' int2str(value)]);
+        end
+        
+        %Set oscilloscope averaging mode
+        function osc_avg_set(obj,value)
+            if(value)
+                obj.dev.write([':ACQUIRE:COUNT ' int2str(obj.get_setting('osc_avg_number').val)]);
+                obj.dev.write(':ACQUIRE:TYPE AVER');
+                obj.dev.write(':WAV:POINTS:MODE NORM');
+%                obj.dev.write(':RUN')
+                obj.dev.write(':TRIG:COUP LFR'); % Low Frequency reject works for D0X long transients. Otherwise, first point in internal averaging was shifted.
+                obj.dev.write(':TRIGGER:SWEEP NORMAL');
+                %obj.dev.write(':TRIGGER:SWEEP AUTO');
+            else
+                obj.dev.write(':SINGLE');
+                obj.dev.write(':TRIG:COUP DC'); % Low Frequency reject works for D0X long transients. Otherwise, first point in internal averaging was shifted.
+                obj.dev.write(':TRIGGER:SWEEP AUTO');
+                obj.AcqRes_set(obj.get_setting('acquire_res').val);
+            end
+            obj.dev.check('[MSO] Averaging setting');
+        end
+        
+        %DO CHECK FUNCTIONS FOR SETTINGS
+        %Set time range
+        function timeRange_set(obj,value)
+            obj.dev.write(sprintf(':TIM:RANG %g',value));
+        end
+        
+        %Set time offset (from trigger)
+        function timeOffset_set(obj,value)
+            time_range = obj.get_setting('timeRange').val;
+            value = value + time_range/2;
+            obj.dev.write(sprintf(':TIM:POS %g',value));
+        end
+        
+        %Set impedance per channel
+        function impedance_set(obj,value,chan)
+            switch(value)
+                case '50 Ohm'
+                    obj.dev.write([':CHANNEL' chan ':IMPEDANCE FIFTY']);
+                    
+                case '1 MOhm'
+                    obj.dev.write([':CHANNEL' chan ':IMPEDANCE ONEM']);
+            end
+        end
+        
+        %Set voltage range per channel
+        function voltRange_set(obj,value,chan)
+            obj.dev.write([':CHAN' chan ':RANG ' num2str(value) 'V']);
+        end
+        
+        %Set voltage offset per channel
+        function voltOffset_set(obj,value,chan)
+            obj.dev.write([':CHAN' chan ':OFFS ' num2str(value) 'V']);
+        end
+        
+        %Set triggering options
+        function TrigOpts_set(obj,value)
+            switch(value)
+                case 'External'
+                     obj.dev.write(':TRIGGER:SOURCE EXT');
+                    
+                case 'Computer'
+                    %just *trg forces trigger
+            end
+        end
+        
+        %Set Acquire resolution
+        function AcqRes_set(obj,value)
+            % Check if internal averaging is on. If so don't set different
+            % mode.
+            if ~obj.get_setting('osc_avg').val
+                switch(value)
+                    case 'Normal'
+                        obj.dev.write(':ACQUIRE:TYPE NORM');
+                        obj.dev.write(':WAV:POINTS:MODE NORM');
+                    case 'High'
+                        obj.dev.write(':ACQUIRE:TYPE HRES'); %< CHANGE BACK TO HRES
+                        obj.dev.write(':WAV:POINTS:MODE NORM');
+                end
+            end
+        end
+        
+    end
+    
+    %Parameter check (value = [min max])
+    methods (Access = private)
+        function flag = timeRange_check(obj,value)
+            flag = 1;
+                
+            %WARNING: change in timeRange may incur change in AcqPts and
+            %stop the current run.
+            if(any(value < 0.5e-9 | value > 50))
+                flag = 0;
+                obj.msgbox('Time range must be set between 0.5ns and 50s');
+            end
+        end
+        
+        %Check time offset (from trigger)
+        function flag = timeOffset_check(obj,value)
+            flag = 1;
+            time_range = obj.get_setting('timeRange').val;
+            value = value + time_range/2;
+        end
+        
+        %Check voltage range per channel (NOW ALL SAME TO CHANGE!)
+        function flag = voltRange_check(obj,value,varargin)
+            flag = 1;
+            
+            if(any(value < 8e-3 | value > 20)) 
+                flag = 0;
+                if(~isempty(varargin) && varargin{1} == 1)
+                    obj.msgbox('Voltage range must be set between 8mV and 20V');
+                end
+            end
+        end
+        
+        %Check voltage offset per channel
+        function flag = voltOffset_check(obj,value,varargin)
+            flag = 1;
+            
+%             if(any(value < 250e-6 | value > 20)) 
+%                 flag = 0;
+%                 if(~isempty(varargin) && varargin{1} == 1)
+%                     obj.msgbox('Voltage offset must be set between and ');
+%                 end
+%             end
+        end
+        
+        %Check averaging setting
+        function flag = osc_avg_check(obj,value)
+            flag = 1;
+            if(value) %Only allow averaging if SPP>1
+                %obj.msgbox('Requires a continuous trigger.');
+            end
+        end
+        %Check averaging setting
+        function flag = osc_avg_number_check(obj,value)
+            if(any(value < 1 | value > 65536)) 
+                obj.msgbox('No. of points must be within [1 65536].');
+                flag = 0;
+            else
+                flag = 1;
+            end
+        end
+        
+    end
+end
+
